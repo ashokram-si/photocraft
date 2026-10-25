@@ -190,6 +190,29 @@ fn a_panic_in_a_command_becomes_an_error_and_the_document_is_unchanged() {
 }
 
 #[test]
+fn a_panic_before_a_command_runs_becomes_an_error_and_the_document_is_unchanged() {
+    // #8604: the checks `dispatch` makes before `run` (the authorization gate, param checks,
+    // preconditions) are inside the last-resort guard too.
+    let mut s = session(64, 64);
+    let doc_before = s.active().unwrap().doc.clone();
+    let (rev, steps) = (s.active().unwrap().revision, s.active().unwrap().history.past_len());
+    // A live-commit offer pending for this dispatch doesn't outlive it.
+    let live = crate::brush_cmds::mixer_live::LiveMixer::begin(&s, &json!({"points": [[16, 16]], "size": 4})).unwrap();
+    live.prepare_commit(&mut s).unwrap();
+    s.authorize = Some(|_, _| panic!("a check that panics"));
+    let msg = s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap_err().to_string();
+    assert!(msg.contains("internal error"), "{msg}");
+    assert!(msg.contains("filter.blur.gaussianBlur"), "{msg}");
+    assert!(s.live_commit.is_none() && s.filter_mask_layer.is_none());
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!((st.revision, st.history.past_len()), (rev, steps));
+    // The session still works.
+    s.authorize = None;
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+}
+
+#[test]
 fn progress_is_monotonic_and_reaches_one() {
     let ctx = JobCtx::new();
     ctx.progress(0.5, "half");

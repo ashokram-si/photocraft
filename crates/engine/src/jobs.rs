@@ -764,6 +764,24 @@ impl Session {
 
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
+        // Last-resort guard (AGENTS.md, Never crash) around the whole dispatch: the checks before
+        // `run` and the bookkeeping after it see the same untrusted params as `run` (#8604). A
+        // panic there leaves no per-command flag set for the next command.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch_unguarded(id, params, background))).unwrap_or_else(|_| {
+            self.jobs.spawn = false;
+            self.coalesce_request = None;
+            self.color_restrict = None;
+            self.filter_mask_layer = None;
+            self.live_commit = None;
+            if let Some(job) = self.jobs.pending.take() {
+                job.ctx.cancel();
+            }
+            Err(EngineError::Other(format!("`{id}` failed with an internal error (logged)")))
+        })
+    }
+
+    /// [`Self::dispatch`] without its outer guard.
+    fn dispatch_unguarded(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
         // The offer belongs to this one dispatch. Early errors drop it locally, including
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
