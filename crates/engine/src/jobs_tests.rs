@@ -215,14 +215,18 @@ fn a_panic_before_a_command_runs_becomes_an_error_and_the_document_is_unchanged(
 #[test]
 fn a_panic_after_a_command_ran_still_reports_its_committed_edit() {
     // #8604: once `run` has committed its edit, a panic in the bookkeeping after it doesn't turn
-    // the command into an error, which would invite a caller to apply the edit again.
+    // the command into an error, which would invite a caller to apply the edit again, and the step
+    // is still journaled.
     let mut s = session(64, 64);
-    let rev = s.active().unwrap().revision;
+    let (rev, journaled) = (s.active().unwrap().revision, s.journal.len());
     super::PANIC_AFTER_COMMAND.set(true);
     let r = s.execute("filter.blur.gaussianBlur", json!({"radius": 1}));
     super::PANIC_AFTER_COMMAND.set(false);
     assert!(r.is_ok(), "{r:?}");
     assert_ne!(s.active().unwrap().revision, rev, "the blur was applied");
+    // The step is journaled, so an action recorded from the journal replays it.
+    assert_eq!(s.journal.len(), journaled + 1);
+    assert_eq!(s.journal.last().map(|(id, _)| id.as_str()), Some("filter.blur.gaussianBlur"));
     // The session still works.
     s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
 }

@@ -885,7 +885,7 @@ impl Session {
             (Ok(v), None) => {
                 // The command's edit is committed. A panic in the bookkeeping after it is logged,
                 // but the command still succeeds: reporting it as failed would invite a caller to
-                // apply the edit again (#8604).
+                // apply the edit again (#8604). The journal entry is made even then.
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     if let Some(before) = before {
                         self.add_relayout_damage(&before);
@@ -901,7 +901,9 @@ impl Session {
                             st.fx_collapsed.push(layer_id);
                         }
                     }
-                    self.after_command(id, params, spec.journal, Some(nested_from), pre_selected.as_deref());
+                }));
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.after_command(id, params, spec.journal, Some(nested_from), pre_selected.as_deref())
                 }));
                 Ok(Started::Done(v))
             }
@@ -941,17 +943,21 @@ impl Session {
     /// Edit › Transform › Again (and Again on a Copy) is not replayable and keeps the concrete
     /// steps it ran instead.
     fn after_command(&mut self, id: &str, params: Value, journal: bool, nested_from: Option<usize>, pre_selected: Option<&[LayerId]>) {
-        #[cfg(test)]
-        if PANIC_AFTER_COMMAND.get() {
-            panic!("bookkeeping after `{id}` panics");
-        }
-        // A layer-mask view ends when another layer becomes active (#196).
-        if let Some(st) = self.active_mut() {
-            crate::mask_view_cmds::fix(st);
-        }
-        crate::edit_menu_cmds::after_command(self, id, &params);
-        crate::automate_cmds::after_command(self, id);
-        self.sync_preset_store();
+        // The bookkeeping before the journal entry: a panic in it is logged, and the step is
+        // still journaled so an action recorded from it can replay the committed edit (#8604).
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            #[cfg(test)]
+            if PANIC_AFTER_COMMAND.get() {
+                panic!("bookkeeping after `{id}` panics");
+            }
+            // A layer-mask view ends when another layer becomes active (#196).
+            if let Some(st) = self.active_mut() {
+                crate::mask_view_cmds::fix(st);
+            }
+            crate::edit_menu_cmds::after_command(self, id, &params);
+            crate::automate_cmds::after_command(self, id);
+            self.sync_preset_store();
+        }));
         if !journal {
             return;
         }
