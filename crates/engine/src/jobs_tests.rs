@@ -213,6 +213,21 @@ fn a_panic_before_a_command_runs_becomes_an_error_and_the_document_is_unchanged(
 }
 
 #[test]
+fn a_panic_after_a_command_ran_still_reports_its_committed_edit() {
+    // #8604: once `run` has committed its edit, a panic in the bookkeeping after it doesn't turn
+    // the command into an error, which would invite a caller to apply the edit again.
+    let mut s = session(64, 64);
+    let rev = s.active().unwrap().revision;
+    super::PANIC_AFTER_COMMAND.set(true);
+    let r = s.execute("filter.blur.gaussianBlur", json!({"radius": 1}));
+    super::PANIC_AFTER_COMMAND.set(false);
+    assert!(r.is_ok(), "{r:?}");
+    assert_ne!(s.active().unwrap().revision, rev, "the blur was applied");
+    // The session still works.
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+}
+
+#[test]
 fn progress_is_monotonic_and_reaches_one() {
     let ctx = JobCtx::new();
     ctx.progress(0.5, "half");

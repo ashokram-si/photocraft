@@ -883,21 +883,26 @@ impl Session {
                 Ok(Started::Job(jid))
             }
             (Ok(v), None) => {
-                if let Some(before) = before {
-                    self.add_relayout_damage(&before);
-                }
-                if let Some((doc_id, layer_id)) = new_fx_target
-                    && let Some(st) = self.active_mut()
-                    && st.doc.id == doc_id
-                    && st.doc.layer(layer_id).is_some_and(|l| !l.effects.items.is_empty())
-                {
-                    if expand_new_fx {
-                        st.fx_collapsed.retain(|id| *id != layer_id);
-                    } else if !st.fx_collapsed.contains(&layer_id) {
-                        st.fx_collapsed.push(layer_id);
+                // The command's edit is committed. A panic in the bookkeeping after it is logged,
+                // but the command still succeeds: reporting it as failed would invite a caller to
+                // apply the edit again (#8604).
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Some(before) = before {
+                        self.add_relayout_damage(&before);
                     }
-                }
-                self.after_command(id, params, spec.journal, Some(nested_from), pre_selected.as_deref());
+                    if let Some((doc_id, layer_id)) = new_fx_target
+                        && let Some(st) = self.active_mut()
+                        && st.doc.id == doc_id
+                        && st.doc.layer(layer_id).is_some_and(|l| !l.effects.items.is_empty())
+                    {
+                        if expand_new_fx {
+                            st.fx_collapsed.retain(|id| *id != layer_id);
+                        } else if !st.fx_collapsed.contains(&layer_id) {
+                            st.fx_collapsed.push(layer_id);
+                        }
+                    }
+                    self.after_command(id, params, spec.journal, Some(nested_from), pre_selected.as_deref());
+                }));
                 Ok(Started::Done(v))
             }
         }
@@ -936,6 +941,10 @@ impl Session {
     /// Edit › Transform › Again (and Again on a Copy) is not replayable and keeps the concrete
     /// steps it ran instead.
     fn after_command(&mut self, id: &str, params: Value, journal: bool, nested_from: Option<usize>, pre_selected: Option<&[LayerId]>) {
+        #[cfg(test)]
+        if PANIC_AFTER_COMMAND.get() {
+            panic!("bookkeeping after `{id}` panics");
+        }
         // A layer-mask view ends when another layer becomes active (#196).
         if let Some(st) = self.active_mut() {
             crate::mask_view_cmds::fix(st);
@@ -1124,6 +1133,12 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
             journal: false,
         },
     ]
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: make [`Session::after_command`] panic, as a bug in the bookkeeping after a command would.
+    pub(crate) static PANIC_AFTER_COMMAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
