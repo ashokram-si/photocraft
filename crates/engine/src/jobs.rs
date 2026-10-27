@@ -1148,7 +1148,6 @@ thread_local! {
 }
 
 #[cfg(test)]
-#[path = "jobs_tests.rs"]
 mod tests;
 
 #[cfg(test)]
